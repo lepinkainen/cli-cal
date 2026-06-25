@@ -1,5 +1,7 @@
 version: 2
 
+project_name: cal
+
 before:
   hooks:
     - go mod tidy
