@@ -40,11 +40,13 @@ var (
 )
 
 func render(w io.Writer, events []Event, start time.Time, days int) {
+	emit := func(s string) { _, _ = io.WriteString(w, s+"\n") }
+
 	header := "📅  Calendar"
 	if days > 1 {
 		header = fmt.Sprintf("%s — next %d days", header, days)
 	}
-	fmt.Fprintln(w, titleStyle.Render(header))
+	emit(titleStyle.Render(header))
 
 	today := start
 	byDay := map[string][]Event{}
@@ -57,19 +59,18 @@ func render(w io.Writer, events []Event, start time.Time, days int) {
 		day := start.AddDate(0, 0, d)
 		key := day.Format("2006-01-02")
 		label := day.Format("Mon, Jan 2")
-		if day.Equal(today) {
-			label += "  ·  today"
-			fmt.Fprintln(w, todayStyle.Render(label))
-		} else if day.Equal(today.AddDate(0, 0, 1)) {
-			label += "  ·  tomorrow"
-			fmt.Fprintln(w, dayStyle.Render(label))
-		} else {
-			fmt.Fprintln(w, dayStyle.Render(label))
+		switch {
+		case day.Equal(today):
+			emit(todayStyle.Render(label + "  ·  today"))
+		case day.Equal(today.AddDate(0, 0, 1)):
+			emit(dayStyle.Render(label + "  ·  tomorrow"))
+		default:
+			emit(dayStyle.Render(label))
 		}
 
 		evs := byDay[key]
 		if len(evs) == 0 {
-			fmt.Fprintln(w, "  "+emptyStyle.Render("—"))
+			emit("  " + emptyStyle.Render("—"))
 			continue
 		}
 		for _, e := range evs {
@@ -79,10 +80,9 @@ func render(w io.Writer, events []Event, start time.Time, days int) {
 			} else {
 				when = timeStyle.Render(e.Start.Format("15:04") + "–" + e.End.Format("15:04"))
 			}
-			line := "  " + when + summaryStyle.Render(e.Summary) + "  " + calStyle.Render("("+e.Cal+")")
-			fmt.Fprintln(w, line)
+			emit("  " + when + summaryStyle.Render(e.Summary) + "  " + calStyle.Render("("+e.Cal+")"))
 			if e.Location != "" {
-				fmt.Fprintln(w, "  "+lipgloss.NewStyle().Width(13).Render("")+locStyle.Render("@ "+e.Location))
+				emit("  " + lipgloss.NewStyle().Width(13).Render("") + locStyle.Render("@ "+e.Location))
 			}
 		}
 	}

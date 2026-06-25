@@ -21,6 +21,9 @@ import (
 // defaultDays is used when neither the -days flag nor the config sets a value.
 const defaultDays = 2
 
+// Version is injected at build time via -ldflags "-X main.Version=...".
+var Version = "dev"
+
 // Event is one calendar occurrence within the viewing window.
 type Event struct {
 	Cal      string
@@ -45,12 +48,19 @@ type Config struct {
 
 func main() {
 	var (
-		cfgPath string
-		days    int
+		cfgPath     string
+		days        int
+		showVersion bool
 	)
 	flag.StringVar(&cfgPath, "config", xdgConfigPath(), "path to YAML config")
 	flag.IntVar(&days, "days", 0, "number of days to show starting today (overrides config)")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println("cal", Version)
+		return
+	}
 
 	// First run with no config: write a sample and exit so the user can edit it.
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
@@ -120,7 +130,7 @@ func xdgConfigPath() string {
 
 // loadConfig reads and parses the YAML config, normalizing calendar URLs.
 func loadConfig(path string) (Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // config path is user-supplied by design
 	if err != nil {
 		return Config{}, err
 	}
@@ -147,10 +157,11 @@ calendars:
 
 // writeSampleConfig creates the parent directory and writes a commented sample.
 func writeSampleConfig(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(sampleConfig), 0o644)
+	// 0600: config may hold calendar URLs with embedded API keys.
+	return os.WriteFile(path, []byte(sampleConfig), 0o600)
 }
 
 // normalizeURL maps webcal scheme to https for fetching.
@@ -162,12 +173,10 @@ func normalizeURL(u string) string {
 }
 
 // fetchAll downloads and parses every calendar concurrently.
-func fetchAll(cals []Calendar, start, end time.Time) ([]Event, []string) {
+func fetchAll(cals []Calendar, start, end time.Time) (events []Event, errs []string) {
 	var (
-		mu     sync.Mutex
-		wg     sync.WaitGroup
-		events []Event
-		errs   []string
+		mu sync.Mutex
+		wg sync.WaitGroup
 	)
 
 	for _, c := range cals {
@@ -192,7 +201,7 @@ func fetchCalendar(c Calendar, start, end time.Time) ([]Event, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +209,7 @@ func fetchCalendar(c Calendar, start, end time.Time) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -281,7 +290,7 @@ func expandEvent(calName string, ve *ics.VEvent, start, end time.Time) []Event {
 	allDay := isAllDay(ve)
 
 	var dur time.Duration
-	if dtEnd, err := ve.GetEndAt(); err == nil && dtEnd.After(dtStart) {
+	if dtEnd, endErr := ve.GetEndAt(); endErr == nil && dtEnd.After(dtStart) {
 		dur = dtEnd.Sub(dtStart)
 	} else if allDay {
 		dur = 24 * time.Hour

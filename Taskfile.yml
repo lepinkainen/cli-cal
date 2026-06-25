@@ -1,0 +1,88 @@
+# See: https://taskfile.dev/
+version: '3'
+
+vars:
+  BUILD_DIR: build
+  PROJECT_NAME: cal
+  # VERSION: "vX.Y.Z-abc1234" from git tags, or "dev-<timestamp>" with no tags.
+  VERSION:
+    sh: |
+      tag=$(git describe --tags 2>/dev/null || echo "dev")
+      if [ "$tag" = "dev" ]; then
+        echo "dev-$(date '+%Y-%m-%d_%H:%M:%S')"
+      else
+        echo "$tag-$(git log -n 1 --format=%h)"
+      fi
+
+tasks:
+  # Core build - runs tests and linters first.
+  build:
+    desc: Build the project (tests + lint + compile)
+    deps: [test, lint]
+    cmds:
+      - task: build-go
+
+  # CI build: compile only. Test/lint run as separate CI jobs.
+  build-ci:
+    desc: Build for CI/CD (compile only)
+    cmds:
+      - task: build-go
+
+  build-go:
+    desc: Build the cal binary
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -v -ldflags="-s -w -X main.Version={{.VERSION}}" -o {{.BUILD_DIR}}/{{.PROJECT_NAME}} .
+    sources:
+      - ./*.go
+    generates:
+      - "{{.BUILD_DIR}}/{{.PROJECT_NAME}}"
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test $(go list ./... | grep -v llm-shared)
+
+  test-ci:
+    desc: Run tests with coverage for CI
+    cmds:
+      - go test -cover -coverprofile=coverage.out $(go list ./... | grep -v llm-shared)
+
+  lint:
+    desc: Format and lint Go code
+    cmds:
+      - fd -e go -E llm-shared -x goimports -w
+      - go vet $(go list ./... | grep -v llm-shared)
+      - golangci-lint run
+
+  # Advisory tooling (not gated on build)
+  vuln-go:
+    desc: Scan dependencies for known vulnerabilities (advisory)
+    cmds:
+      - govulncheck $(go list ./... | grep -v llm-shared)
+
+  deadcode-go:
+    desc: Report unreachable Go functions (advisory)
+    cmds:
+      - deadcode $(go list ./... | grep -v llm-shared)
+
+  # Release helpers (require goreleaser)
+  release-check:
+    desc: Validate the GoReleaser config
+    cmds:
+      - goreleaser check
+
+  release-snapshot:
+    desc: Build a local release snapshot to ./dist (no publish)
+    cmds:
+      - goreleaser release --snapshot --clean
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}} dist coverage.out
+
+  run:
+    desc: Run the tool
+    cmds:
+      - go run . {{.CLI_ARGS}}
